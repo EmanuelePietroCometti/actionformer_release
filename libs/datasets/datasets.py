@@ -3,22 +3,31 @@ import torch
 from .data_utils import trivial_batch_collator, worker_init_reset_seed
 
 datasets = {}
+
+
 def register_dataset(name):
-   def decorator(cls):
-       datasets[name] = cls
-       return cls
-   return decorator
+    def decorator(cls):
+        datasets[name] = cls
+        return cls
+
+    return decorator
+
 
 def make_dataset(name, is_training, split, **kwargs):
-   """
-       A simple dataset builder
-   """
-   dataset = datasets[name](is_training, split, **kwargs)
-   return dataset
+    """
+    A simple dataset builder
+    """
+    # Remove keys that the target dataset class does not accept in its __init__
+    # to prevent TypeError. Default to None if the key doesn't exist in kwargs.
+    kwargs.pop("backbone", None)
+    kwargs.pop("division_type", None)
+    kwargs.pop("videos_type", None)
 
+    dataset = datasets[name](is_training, split, **kwargs)
+    return dataset
 def make_data_loader(dataset, is_training, generator, batch_size, num_workers):
     """
-        A simple dataloder builder
+    A simple dataloder builder
     """
     loader = torch.utils.data.DataLoader(
         dataset,
@@ -29,6 +38,6 @@ def make_data_loader(dataset, is_training, generator, batch_size, num_workers):
         shuffle=is_training,
         drop_last=is_training,
         generator=generator,
-        persistent_workers=True
+        persistent_workers=True,
     )
     return loader

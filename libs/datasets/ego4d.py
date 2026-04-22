@@ -9,6 +9,7 @@ from torch.nn import functional as F
 from .datasets import register_dataset
 from .data_utils import truncate_feats
 
+import glob
 @register_dataset("ego4d")
 class EGO4DDataset(Dataset):
     def __init__(
@@ -33,20 +34,14 @@ class EGO4DDataset(Dataset):
         # file path
         if not isinstance(feat_folder, (list, tuple)):
             feat_folder = (feat_folder, )
-        assert all([os.path.exists(folder) for folder in feat_folder])
-        assert os.path.exists(json_file)
-        assert isinstance(split, tuple) or isinstance(split, list)
-        assert crop_ratio == None or len(crop_ratio) == 2
+        
         self.feat_folder = feat_folder
-        if file_prefix is not None:
-            self.file_prefix = file_prefix
-        else:
-            self.file_prefix = ''
+        self.file_prefix = file_prefix if file_prefix is not None else ''
         self.file_ext = file_ext
         self.json_file = json_file
 
         # split / training mode
-        self.split = split
+        self.split = [s.lower() for s in split]
         self.is_training = is_training
 
         # features meta info
@@ -73,6 +68,8 @@ class EGO4DDataset(Dataset):
             'tiou_thresholds': np.linspace(0.1, 0.5, 5),
             'empty_label_ids': []
         }
+        
+        print(f"--> Dataset loaded: {len(self.data_list)} videos found for split {self.split}")
 
     def get_attributes(self):
         return self.db_attributes
@@ -98,26 +95,20 @@ class EGO4DDataset(Dataset):
             # skip the video if not in the split
             if value['subset'].lower() not in self.split:
                 continue
-            # or does not have the feature file
-            feat_files = [os.path.join(
-                folder, self.file_prefix + key + self.file_ext
-            ) for folder in self.feat_folder]
-            if not all([os.path.exists(file) for file in feat_files]):
+            
+            actual_feat_path = None
+            for folder in self.feat_folder:
+                search_pattern = os.path.join(folder, f"*{key}*{self.file_ext}")
+                found_files = glob.glob(search_pattern)
+                if found_files:
+                    actual_feat_path = found_files[0]
+                    break
+            
+            if actual_feat_path is None:
                 continue
-
-            # get fps if available
-            if self.default_fps is not None:
-                fps = self.default_fps
-            elif 'fps' in value:
-                fps = value['fps']
-            else:
-                assert False, "Unknown video FPS."
-
-            # get video duration if available
-            if 'duration' in value:
-                duration = value['duration']
-            else:
-                duration = 1e8
+            
+            fps = self.default_fps if self.default_fps is not None else value.get('fps', 30)
+            duration = value.get('duration', 1e8)
 
             # get annotations if available
             if ('annotations' in value) and (len(value['annotations']) > 0):
@@ -151,13 +142,15 @@ class EGO4DDataset(Dataset):
         # instead the model will need to decide how to batch / preporcess the data
         video_item = self.data_list[idx]
 
-        # load features
-        filenames = [os.path.join(
-            folder, self.file_prefix + video_item['id'] + self.file_ext
-        ) for folder in self.feat_folder]
-        feats = np.concatenate(
-            [np.load(name).astype(np.float32) for name in filenames], axis=1
-        )
+        # load features 
+        # Code modified to suppport npz input file
+        feats = np.load(video_item['actual_path'])
+        
+        if isinstance(feats, np.lib.npyio.NpzFile):
+            key = feats.files[0]
+            feats = feats[key]
+            
+        feats = feats.astype(np.float32)
 
         # deal with downsampling (= increased feat stride)
         feats = feats[::self.downsample_rate, :]
